@@ -1,0 +1,128 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio:RELEASE.2024-05-28T17-19-04Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  createbucket:
+    image: minio/mc
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set local http://minio:9000 minioadmin minioadmin &&
+      (/usr/bin/mc ls local/artifacts || /usr/bin/mc mb local/artifacts) &&
+      exit 0
+      "
+
+  api:
+    build: ./api
+    environment:
+      - APP_ENV=${APP_ENV}
+      - SECRET_KEY=${SECRET_KEY}
+      - AUTH_MODE=${AUTH_MODE}
+      - OIDC_ISSUER=${OIDC_ISSUER}
+      - OIDC_AUDIENCE=${OIDC_AUDIENCE}
+      - OIDC_JWKS_URL=${OIDC_JWKS_URL}
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_REGION=${S3_REGION}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_SECURE=${S3_SECURE}
+      - SIEM_WEBHOOK_URL=${SIEM_WEBHOOK_URL}
+      - SCRIPT_BASE=${SCRIPT_BASE}
+      - ALLOW_INTERPRETERS=${ALLOW_INTERPRETERS}
+      - RUNNER_IMAGE=${RUNNER_IMAGE}
+      - DEFAULT_TIMEOUT_SEC=${DEFAULT_TIMEOUT_SEC}
+      - DEFAULT_CPU_LIMIT=${DEFAULT_CPU_LIMIT}
+      - DEFAULT_MEM_LIMIT_MB=${DEFAULT_MEM_LIMIT_MB}
+      - MAX_OUTPUT_MB=${MAX_OUTPUT_MB}
+    volumes:
+      - ./scripts:/opt/scripts:ro
+    depends_on:
+      - postgres
+      - redis
+      - minio
+      - createbucket
+    ports:
+      - "8081:8080"
+
+  worker:
+    build: ./api
+    command: bash -lc "celery -A app.worker.celery_app worker -l INFO"
+    environment:
+      - APP_ENV=${APP_ENV}
+      - SECRET_KEY=${SECRET_KEY}
+      - AUTH_MODE=${AUTH_MODE}
+      - OIDC_ISSUER=${OIDC_ISSUER}
+      - OIDC_AUDIENCE=${OIDC_AUDIENCE}
+      - OIDC_JWKS_URL=${OIDC_JWKS_URL}
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_REGION=${S3_REGION}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_SECURE=${S3_SECURE}
+      - SCRIPT_BASE=${SCRIPT_BASE}
+      - ALLOW_INTERPRETERS=${ALLOW_INTERPRETERS}
+      - RUNNER_IMAGE=${RUNNER_IMAGE}
+      - DEFAULT_TIMEOUT_SEC=${DEFAULT_TIMEOUT_SEC}
+      - DEFAULT_CPU_LIMIT=${DEFAULT_CPU_LIMIT}
+      - DEFAULT_MEM_LIMIT_MB=${DEFAULT_MEM_LIMIT_MB}
+      - MAX_OUTPUT_MB=${MAX_OUTPUT_MB}
+    volumes:
+      - ./scripts:/opt/scripts:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - api
+      - postgres
+      - redis
+
+  runner-image:
+    build:
+      context: ./runner
+      dockerfile: Dockerfile
+    image: secure-script-runner/runner:latest
+
+  ui:
+    build: ./ui
+    environment:
+      - NEXT_PUBLIC_API_BASE=http://localhost:8080
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:
+  minio:
